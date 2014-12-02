@@ -34,7 +34,7 @@ AWRSCRIPT_LASTUPDATE="01/12/2014"
 #
 # Usage: ./awr-parser.sh [ -n | -H ] [ -s | -p | -v ] <awr-filename.txt> (wildcards are accepted)
 #
-#   Script for analyzing multiple AWR reports and extracting useful information
+#   Script for parsing multiple AWR reports and extracting useful information
 #   Redirect stdout to a CSV file to import into Excel
 #   Errors and info are printed to stderr
 #
@@ -113,7 +113,7 @@ usage() {
 	echo "" 1>&2
 	echo " Version v${AWRSCRIPT_VERSION} (published on $AWRSCRIPT_LASTUPDATE)"
 	echo "" 1>&2
-	echo "  Script for analyzing multiple AWR reports and extracting useful information"
+	echo "  Script for parsing multiple AWR reports and extracting useful information"
 	echo "  Redirect stdout to a CSV file to import into Excel" 1>&2
 	echo "  Errors and info are printed to stderr" 1>&2
 	echo "" 1>&2
@@ -1928,7 +1928,7 @@ while (( "$#" )); do
 	if [ -r "$1" ]; then
 		AWRFILE=$1
 		echovrb " "
-		echoinf "Analyzing file $AWRFILE at `date +'%F %T'`"
+		echoinf "Parsing file $AWRFILE at `date +'%F %T'`"
 		# Perform checks to ensure file is an AWR report but not in HTML format
 		CHECK_HTML=$(sed -n -e '1,5 p' $AWRFILE | grep -i "<HTML>" | wc -l)
 		CHECK_STATSPACK=$(sed -n -e '1,5 p' $AWRFILE | grep STATSPACK | wc -l)
