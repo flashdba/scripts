@@ -24,8 +24,8 @@
 #  #                                                                         #
 #  ###########################################################################
 #
-AWRSCRIPT_VERSION="1.01"
-AWRSCRIPT_LASTUPDATE="01/12/2014"
+AWRSCRIPT_VERSION="1.02"
+AWRSCRIPT_LASTUPDATE="05/01/2015"
 #
 # Used to parse multiple AWR reports and extract useful information
 # The input is an AWR workload repository report **in TEXT format**
@@ -57,7 +57,8 @@ AWRSCRIPT_LASTUPDATE="01/12/2014"
 #
 # Version History
 #
-# 1.00   01/12/2014	flashdba	Initial release
+# 1.00   01/12/2014	flashdba	Initial release (open sourced from AWR-Analyze.sh)
+# 1.01   05/01/2015	flashdba	Added ability to read Wait Event Histogram sections
 
 # I have recently learnt that the way I calculate Redo write IOPS/Throughput is incorrect. The Oracle statistic "redo size" does
 # not take into account multiplexing of online redo logs, nor does it include the value of "redo wastage". For this reason the
@@ -150,7 +151,7 @@ set_ifs_to_line_delimited() {
 process_header_row() {
 	echodbg "Entering process_header_row() with argument $1"
 	# Clear the column variables down
-	unset AWRCOL1 AWRCOL2 AWRCOL3 AWRCOL4 AWRCOL5 AWRCOL6 AWRCOL7
+	unset AWRCOL1 AWRCOL2 AWRCOL3 AWRCOL4 AWRCOL5 AWRCOL6 AWRCOL7 AWRCOL8 AWRCOL9 AWRCOL10
 	if [ -z "$1" ]; then
 		echodbg "process_header_row() called with zero arguments - doing nothing"
 		PROCESS_HEADER_ROW="NO_DATA"
@@ -169,7 +170,7 @@ process_header_row() {
 			echovrb "Failed during process_header_row() because header did not have enough arguments ($HEADERROW_COLUMNS)"
 			PROCESS_HEADER_ROW="FAILED"
 			return $EXIT_FAILURE
-		elif [ "$HEADERROW_COLUMNS" -gt "7" ]; then
+		elif [ "$HEADERROW_COLUMNS" -gt "10" ]; then
 			echovrb "Failed during process_header_row() because header had too many arguments ($HEADERROW_COLUMNS)"
 			PROCESS_HEADER_ROW="FAILED"
 			return $EXIT_FAILURE
@@ -188,7 +189,7 @@ process_header_row() {
 			COL_COUNTER=$(($COL_COUNTER + ${#HEADERROW_ARRAY[${AWRCOLNUM}-1]} + 1))
 			let AWRCOLNUM++
 		done
-		echodbg "Computed column widths: AWRCOL1=$AWRCOL1, AWRCOL2=$AWRCOL2, AWRCOL3=$AWRCOL3, AWRCOL4=$AWRCOL4, AWRCOL5=$AWRCOL5, AWRCOL6=$AWRCOL6, AWRCOL7=$AWRCOL7"
+		echodbg "Computed column widths: AWRCOL1=$AWRCOL1, AWRCOL2=$AWRCOL2, AWRCOL3=$AWRCOL3, AWRCOL4=$AWRCOL4, AWRCOL5=$AWRCOL5, AWRCOL6=$AWRCOL6, AWRCOL7=$AWRCOL7, AWRCOL3=$AWRCOL8, AWRCOL4=$AWRCOL9, AWRCOL5=$AWRCOL10"
 		PROCESS_HEADER_ROW="SUCCESS"
 		return $EXIT_SUCCESS
 	fi
@@ -225,6 +226,7 @@ process_awr_report() {
 	FOUND_FG_WAIT_CLASS=$AWR_NOTFOUND	# This is set to AWR_FOUND when the foreground wait class details are found
 	FOUND_FG_WAIT_EVENTS=$AWR_NOTFOUND	# This is set to AWR_FOUND when the foreground wait event details are found
 	FOUND_BG_WAIT_EVENTS=$AWR_NOTFOUND	# This is set to AWR_FOUND when the background wait event details are found
+	FOUND_HG_WAIT_EVENTS=$AWR_NOTFOUND	# This is set to AWR_FOUND when the wait event histogram details are found
 	TOTAL_WAIT_TIME=0			# Counter used in wait class section to sum wait times if DB TIME not present in report
 	AWR_SECTION="AWRProfile"		# Current section - influences which handler routine will be used to process data
 	echodbg "State change AWR_SECTION: reset to Profile"
@@ -459,6 +461,19 @@ process_awr_report() {
 					set_ifs_to_line_delimited
 					# Depending on the AWR format there are more rows of header to skip before processing the Background Wait Events section
 					AWRLINE_SKIP=3
+					# Reset the bailout counter so that we can search for the header row of this section
+					BAILOUT_COUNTER=0
+					continue
+					;;
+				"Wait Event Histogram    "*)
+					# Start of the Wait Event Histogram section
+					echovrb "Start of Wait Event Histogram section found at line $ROWCNT"
+					echodbg "State change AWR_SECTION: $AWR_SECTION -> WaitEventHistogram"
+					AWR_SECTION="WaitEventHistogram"
+					# Set Internal Field Seperator to read entire line into single array element
+					set_ifs_to_line_delimited
+					# Depending on the AWR format there are more rows of header to skip before processing the Background Wait Events section
+					AWRLINE_SKIP=8
 					# Reset the bailout counter so that we can search for the header row of this section
 					BAILOUT_COUNTER=0
 					continue
@@ -1261,6 +1276,7 @@ process_awr_report() {
 			esac
 
 			# Now check WAIT_TIME and if set begin handling the line
+			# The variables AWRCOLn are set in the process_header_row function call earlier in the handler
 			if [ -n "$WAIT_NAME" ]; then
 				if [ "$AWR_FORMAT" = "10" ]; then
 					WAIT_NUM_WAITS=$(echo "${AWRLINE[0]}"| cut -c${AWRCOL2}|sed -e 's/^[ \t]*//;s/[ \t]*$//;s/,//g')
@@ -1370,7 +1386,9 @@ process_awr_report() {
 					WAIT_NAME=""
 					;;
 			esac
+
 			# Now check WAIT_TIME and if set begin handling the line
+			# The variables AWRCOLn are set in the process_header_row function call earlier in the handler
 			if [ -n "$WAIT_NAME" ]; then
 				if [ "$AWR_FORMAT" = "10" ]; then
 					WAIT_NUM_WAITS=$(echo "${AWRLINE[0]}"| cut -c${AWRCOL2}|sed -e 's/^[ \t]*//;s/[ \t]*$//;s/,//g')
@@ -1405,6 +1423,81 @@ process_awr_report() {
 			fi
 			continue
 		fi	# End of handler routine for Background Wait Events section of AWR report
+
+		##################################################################          Wait Event Histogram        ##################################################################
+		if [ "$AWR_SECTION" = "WaitEventHistogram" ]; then
+			# Routine for handling the Background Wait Events section of the report
+			# The format of this section is slightly different between releases 10 and 11
+
+		if [ "$FOUND_HG_WAIT_EVENTS" = "$AWR_NOTFOUND" ]; then
+			# We have just begun processing the Wait Event Histogram section so first we need to discover the header row (a set of dashes showing the column headings)
+			if [ "${AWRLINE[0]:0:6}" = "------" ]; then
+				echodbg "Searching for header row... found"
+				FOUND_HG_WAIT_EVENTS=$AWR_FOUND
+				process_header_row "${AWRLINE[0]}"
+				if [ "$PROCESS_HEADER_ROW" != "SUCCESS" ]; then
+					echovrb "Unable to determine width of rows in Wait Event Histogram section"
+					echodbg "State change AWR_SECTION: $AWR_SECTION -> SearchingForNextSection"
+					AWR_SECTION="SearchingForNextSection"
+					# Switch Internal Field Seperator to only recognise newlines as delimiters
+					set_ifs_to_line_delimited
+				fi
+			else
+				let BAILOUT_COUNTER++
+				if [ "$BAILOUT_COUNTER" -eq "$BAILOUT_LIMIT" ]; then
+					echodbg "Failed to find header row (BAILOUT_COUNTER hit threshold = $BAILOUT_COUNTER)"
+					echovrb "Unable to determine width of rows in Wait Event Histogram section"
+					echodbg "State change AWR_SECTION: $AWR_SECTION -> SearchingForNextSection"
+					AWR_SECTION="SearchingForNextSection"
+					# Switch Internal Field Seperator to only recognise newlines as delimiters
+					set_ifs_to_line_delimited
+					# Give up trying to process this section
+					echodbg "Searching for header row... not found (BAILOUT_COUNTER = $BAILOUT_COUNTER)"
+				fi
+			fi
+			continue
+		fi
+
+			# Start processing the section
+			case ${AWRLINE[0]:0:26} in
+				"db file sequential read"*)
+					WAIT_NAME="DFSR"
+					;;
+				"log file parallel write"*)
+					WAIT_NAME="LFPW"
+					;;
+				*)
+					# Catch all other lines and set WAIT_NAME to be blank
+					WAIT_NAME=""
+					;;
+			esac
+
+			# Now check WAIT_TIME and if set begin handling the line
+			# The variables AWRCOLn are set in the process_header_row function call earlier in the handler
+			if [ -n "$WAIT_NAME" ]; then
+				HGRM_1MS=$(echo "${AWRLINE[0]}"| cut -c${AWRCOL3}|sed -e 's/^[ \t]*//;s/[ \t]*$//;s/,//g')
+				HGRM_2MS=$(echo "${AWRLINE[0]}"| cut -c${AWRCOL4}|sed -e 's/^[ \t]*//;s/[ \t]*$//;s/,//g')
+				HGRM_4MS=$(echo "${AWRLINE[0]}"| cut -c${AWRCOL5}|sed -e 's/^[ \t]*//;s/[ \t]*$//;s/,//g')
+				HGRM_8MS=$(echo "${AWRLINE[0]}"| cut -c${AWRCOL6}|sed -e 's/^[ \t]*//;s/[ \t]*$//;s/,//g')
+				HGRM_16MS=$(echo "${AWRLINE[0]}"| cut -c${AWRCOL7}|sed -e 's/^[ \t]*//;s/[ \t]*$//;s/,//g')
+				HGRM_32MS=$(echo "${AWRLINE[0]}"| cut -c${AWRCOL8}|sed -e 's/^[ \t]*//;s/[ \t]*$//;s/,//g')
+				HGRM_LT1S=$(echo "${AWRLINE[0]}"| cut -c${AWRCOL9}|sed -e 's/^[ \t]*//;s/[ \t]*$//;s/,//g')
+				HGRM_GT1S=$(echo "${AWRLINE[0]}"| cut -c${AWRCOL10}|sed -e 's/^[ \t]*//;s/[ \t]*$//;s/,//g')
+
+				echodbg "Wait Event Histogram $WAIT_NAME: <1ms=$HGRM_1MS, <2ms=$HGRM_2MS, <4ms=$HGRM_4MS, <8ms=$HGRM_8MS, <16ms=$HGRM_16MS, <32ms=$HGRM_32MS, <1s=$HGRM_LT1S, >1s=$HGRM_GT1S"
+
+				# Set variable based on name of wait
+				eval HGRM_${WAIT_NAME}_1MS='$HGRM_1MS'
+				eval HGRM_${WAIT_NAME}_2MS='$HGRM_2MS'
+				eval HGRM_${WAIT_NAME}_4MS='$HGRM_4MS'
+				eval HGRM_${WAIT_NAME}_8MS='$HGRM_8MS'
+				eval HGRM_${WAIT_NAME}_16MS='$HGRM_16MS'
+				eval HGRM_${WAIT_NAME}_32MS='$HGRM_32MS'
+				eval HGRM_${WAIT_NAME}_LT1S='$HGRM_LT1S'
+				eval HGRM_${WAIT_NAME}_GT1S='$HGRM_GT1S'
+			fi
+			continue
+		fi	# End of handler routine for Wait Event Histogram section of AWR report
 
 		##################################################################      Instance Activity Stats         ##################################################################
 		if [ "$AWR_SECTION" = "InstanceActivityStats" ]; then
@@ -1663,175 +1756,191 @@ process_awr_report() {
 # Function for printing the header row in the CSV file i.e. the descriptions of each column
 print_header_row() {
 	# Write header row for CSV file
-	echocsv "Filename,Database Name,Instance Number,Instance Name,Database Version,Cluster,Hostname,Host OS,Num CPUs,Server Memory (GB),DB Block Size,Begin Snap,Begin Time,End Snap,End Time,Elapsed Time (mins),DB Time (mins),Average Active Sessions,Busy Flag,Logical Reads/sec,Block Changes/sec,Read IOPS,Write IOPS,Redo IOPS,All Write IOPS,Total IOPS,Read Throughput (MiB/sec),Write Throughput (MiB/sec),Redo Throughput (MiB/sec),All Write Throughput (MiB/sec),Total Throughput (MiB/sec),DB CPU Time (s),DB CPU %DBTime,Wait Class User I/O Waits,Wait Class User I/O Time (s),Wait Class User I/O Latency (ms),Wait Class User I/O %DBTime,User Calls/sec,Parses/sec,Hard Parses/sec,Logons/sec,Executes/sec,Transactions/sec,Buffer Hit Ratio (%),In-Memory Sort Ratio (%),Log Switches (Total),Log Switches (Per Hour),Top5 Event1 Name,Top5 Event1 Class,Top5 Event1 Waits,Top5 Event1 Time (s),Top5 Event1 Average Time (ms),Top5 Event1 %DBTime,Top5 Event2 Name,Top5 Event2 Class,Top5 Event2 Waits,Top5 Event2 Time (s),Top5 Event2 Average Time (ms),Top5 Event2 %DBTime,Top5 Event3 Name,Top5 Event3 Class,Top5 Event3 Waits,Top5 Event3 Time (s),Top5 Event3 Average Time (ms),Top5 Event3 %DBTime,Top5 Event4 Name,Top5 Event4 Class,Top5 Event4 Waits,Top5 Event4 Time (s),Top5 Event4 Average Time (ms),Top5 Event4 %DBTime,Top5 Event5 Name,Top5 Event5 Class,Top5 Event5 Waits,Top5 Event5 Time (s),Top5 Event5 Average Time (ms),Top5 Event5 %DBTime,db file sequential read Waits,db file sequential read Time (s),db file sequential read Latency (ms),db file sequential read %DBTime,db file scattered read Waits,db file scattered read Time (s),db file scattered read Latency (ms),db file scattered read %DBTime,direct path read Waits,direct path read Time (s),direct path read Latency (ms),direct path read %DBTime,direct path write Waits,direct path write Time (s),direct path write Latency (ms),direct path write %DBTime,direct path read temp Waits,direct path read temp Time (s),direct path read temp Latency (ms),direct path read temp %DBTime,direct path write temp Waits,direct path write temp Time (s),direct path write temp Latency (ms),direct path write temp %DBTime,log file sync Waits,log file sync Time (s),log file sync Latency (ms),log file sync %DBTime,db file parallel write Waits,db file parallel write Time (s),db file parallel write Latency (ms),db file parallel write %DBTime,log file parallel write Waits,log file parallel write Time (s),log file parallel write Latency (ms),log file parallel write %DBTime,log file sequential read Waits,log file sequential read Time (s),log file sequential read Latency (ms),log file sequential read %DBTime,OS busy time,OS idle time,OS iowait time,OS sys time,OS user time,OS cpu wait time,OS resource mgr wait time,Data Guard Flag,Exadata Flag,Wait Class Admin Waits,Wait Class Admin Time (s),Wait Class Admin Latency (ms),Wait Class Admin %DBTime,Wait Class Application Waits,Wait Class Application Time (s),Wait Class Application Latency (ms),Wait Class Application %DBTime,Wait Class Cluster Waits,Wait Class Cluster Time (s),Wait Class Cluster Latency (ms),Wait Class Cluster %DBTime,Wait Class Commit Waits,Wait Class Commit Time (s),Wait Class Commit Latency (ms),Wait Class Commit %DBTime,Wait Class Concurrency Waits,Wait Class Concurrency Time (s),Wait Class Concurrency Latency (ms),Wait Class Concurrency %DBTime,Wait Class Configuration Waits,Wait Class Configuration Time (s),Wait Class Configuration Latency (ms),Wait Class Configuration %DBTime,Wait Class Network Waits,Wait Class Network Time (s),Wait Class Network Latency (ms),Wait Class Network %DBTime,Wait Class Other Waits,Wait Class Other Time (s),Wait Class Other Latency (ms),Wait Class Other %DBTime,Wait Class System I/O Waits,Wait Class System I/O Time (s),Wait Class System I/O Latency (ms),Wait Class System I/O %DBTime"
+	echocsv "Filename,Database Name,Instance Number,Instance Name,Database Version,Cluster,Hostname,Host OS,Num CPUs,Server Memory (GB),DB Block Size,Begin Snap,Begin Time,End Snap,End Time,Elapsed Time (mins),DB Time (mins),Average Active Sessions,Busy Flag,Logical Reads/sec,Block Changes/sec,Read IOPS,Write IOPS,Redo IOPS,All Write IOPS,Total IOPS,Read Throughput (MiB/sec),Write Throughput (MiB/sec),Redo Throughput (MiB/sec),All Write Throughput (MiB/sec),Total Throughput (MiB/sec),DB CPU Time (s),DB CPU %DBTime,Wait Class User I/O Waits,Wait Class User I/O Time (s),Wait Class User I/O Latency (ms),Wait Class User I/O %DBTime,User Calls/sec,Parses/sec,Hard Parses/sec,Logons/sec,Executes/sec,Transactions/sec,Buffer Hit Ratio (%),In-Memory Sort Ratio (%),Log Switches (Total),Log Switches (Per Hour),Top5 Event1 Name,Top5 Event1 Class,Top5 Event1 Waits,Top5 Event1 Time (s),Top5 Event1 Average Time (ms),Top5 Event1 %DBTime,Top5 Event2 Name,Top5 Event2 Class,Top5 Event2 Waits,Top5 Event2 Time (s),Top5 Event2 Average Time (ms),Top5 Event2 %DBTime,Top5 Event3 Name,Top5 Event3 Class,Top5 Event3 Waits,Top5 Event3 Time (s),Top5 Event3 Average Time (ms),Top5 Event3 %DBTime,Top5 Event4 Name,Top5 Event4 Class,Top5 Event4 Waits,Top5 Event4 Time (s),Top5 Event4 Average Time (ms),Top5 Event4 %DBTime,Top5 Event5 Name,Top5 Event5 Class,Top5 Event5 Waits,Top5 Event5 Time (s),Top5 Event5 Average Time (ms),Top5 Event5 %DBTime,db file sequential read Waits,db file sequential read Time (s),db file sequential read Latency (ms),db file sequential read %DBTime,db file scattered read Waits,db file scattered read Time (s),db file scattered read Latency (ms),db file scattered read %DBTime,direct path read Waits,direct path read Time (s),direct path read Latency (ms),direct path read %DBTime,direct path write Waits,direct path write Time (s),direct path write Latency (ms),direct path write %DBTime,direct path read temp Waits,direct path read temp Time (s),direct path read temp Latency (ms),direct path read temp %DBTime,direct path write temp Waits,direct path write temp Time (s),direct path write temp Latency (ms),direct path write temp %DBTime,log file sync Waits,log file sync Time (s),log file sync Latency (ms),log file sync %DBTime,db file parallel write Waits,db file parallel write Time (s),db file parallel write Latency (ms),db file parallel write %DBTime,log file parallel write Waits,log file parallel write Time (s),log file parallel write Latency (ms),log file parallel write %DBTime,log file sequential read Waits,log file sequential read Time (s),log file sequential read Latency (ms),log file sequential read %DBTime,OS busy time,OS idle time,OS iowait time,OS sys time,OS user time,OS cpu wait time,OS resource mgr wait time,Data Guard Flag,Exadata Flag,Wait Class Admin Waits,Wait Class Admin Time (s),Wait Class Admin Latency (ms),Wait Class Admin %DBTime,Wait Class Application Waits,Wait Class Application Time (s),Wait Class Application Latency (ms),Wait Class Application %DBTime,Wait Class Cluster Waits,Wait Class Cluster Time (s),Wait Class Cluster Latency (ms),Wait Class Cluster %DBTime,Wait Class Commit Waits,Wait Class Commit Time (s),Wait Class Commit Latency (ms),Wait Class Commit %DBTime,Wait Class Concurrency Waits,Wait Class Concurrency Time (s),Wait Class Concurrency Latency (ms),Wait Class Concurrency %DBTime,Wait Class Configuration Waits,Wait Class Configuration Time (s),Wait Class Configuration Latency (ms),Wait Class Configuration %DBTime,Wait Class Network Waits,Wait Class Network Time (s),Wait Class Network Latency (ms),Wait Class Network %DBTime,Wait Class Other Waits,Wait Class Other Time (s),Wait Class Other Latency (ms),Wait Class Other %DBTime,Wait Class System I/O Waits,Wait Class System I/O Time (s),Wait Class System I/O Latency (ms),Wait Class System I/O %DBTime,Histogram <1ms db file sequential read,Histogram <2ms db file sequential read,Histogram <4ms db file sequential read,Histogram <8ms db file sequential read,Histogram <16ms db file sequential read,Histogram <32ms db file sequential read,Histogram <1s db file sequential read,Histogram >1s db file sequential read,Histogram <1ms log file parallel write,Histogram <2ms log file parallel write,Histogram <4ms log file parallel write,Histogram <8ms log file parallel write,Histogram <16ms log file parallel write,Histogram <32ms log file parallel write,Histogram <1s log file parallel write,Histogram >1s log file parallel write"
 }
 
 # Function for printing extracted AWR information when in verbose mode
 print_report_info() {
 	# Print harvested information to errinf function
-	echoprt "                           Filename = $AWRFILENAME"
-	echoprt "                         AWR Format = $AWR_FORMAT"
-	echoprt "                      Database Name = $PROFILE_DBNAME"
-	echoprt "                    Instance Number = $PROFILE_INSTANCENUM"
-	echoprt "                      Instance Name = $PROFILE_INSTANCENAME"
-	echoprt "                   Database Version = $PROFILE_DBVERSION"
-	echoprt "                        Cluster Y/N = $PROFILE_CLUSTER"
-	echoprt "                           Hostname = $DB_HOSTNAME"
-	echoprt "                            Host OS = $DB_HOST_OS"
-	echoprt "                     Number of CPUs = $DB_NUM_CPUS"
-	echoprt "                      Server Memory = $DB_HOST_MEM"
-	echoprt "                       DB Blocksize = $DB_BLOCK_SIZE"
-	echoprt "                         Begin Snap = $AWR_BEGIN_SNAP"
-	echoprt "                         Begin Time = $AWR_BEGIN_TIME"
-	echoprt "                           End Snap = $AWR_END_SNAP"
-	echoprt "                           End Time = $AWR_END_TIME"
-	echoprt "                       Elapsed Time = $AWR_ELAPSED_TIME"
-	echoprt "                            DB Time = $AWR_DB_TIME"
-	echoprt "                                AAS = $AWR_AAS"
-	echoprt "                              Busy? = $AWR_BUSY_FLAG"
-	echoprt "                  Logical Reads/sec = $AWR_LOGICAL_READS"
-	echoprt "                  Block Changes/sec = $AWR_BLOCK_CHANGES"
-	echoprt "                          Read IOPS = $READ_IOPS"
-	echoprt "                    Data Write IOPS = $DATA_WRITE_IOPS"
-	echoprt "                    Redo Write IOPS = $REDO_WRITE_IOPS"
-	echoprt "                   Total Write IOPS = $ALL_WRITE_IOPS"
-	echoprt "                         Total IOPS = $TOTAL_IOPS"
-	echoprt "          Read Throughput (MiB/sec) = $READ_THROUGHPUT"
-	echoprt "    Data Write Throughput (MiB/sec) = $DATA_WRITE_THROUGHPUT"
-	echoprt "    Redo Write Throughput (MiB/sec) = $REDO_WRITE_THROUGHPUT"
-	echoprt "   Total Write Throughput (MiB/sec) = $ALL_WRITE_THROUGHPUT"
-	echoprt "         Total Throughput (MiB/sec) = $TOTAL_THROUGHPUT"
-	echoprt "                     DB CPU Time ms = $AWR_DB_CPU"
-	echoprt "                     DB CPU %DBTime = $AWR_DB_CPU_PCT_DBTIME"
-	echoprt "      Wait Class User IO  Num Waits = $WCLASS_USRIO_NUM_WAITS"
-	echoprt "      Wait Class User IO  Wait Time = $WCLASS_USRIO_WAIT_TIME"
-	echoprt "      Wait Class User IO Latency ms = $WCLASS_USRIO_AVEWAIT"
-	echoprt "      Wait Class User IO    %DBTime = $WCLASS_USRIO_PCT_DBTIME"
-	echoprt "                     User Calls/sec = $AWR_USER_CALLS"
-	echoprt "                         Parses/sec = $AWR_PARSES"
-	echoprt "                    Hard Parses/sec = $AWR_HARD_PARSES"
-	echoprt "                         Logons/sec = $AWR_LOGONS"
-	echoprt "                       Executes/sec = $AWR_EXECUTES"
-	echoprt "                   Transactions/sec = $AWR_TRANSACTIONS"
-	echoprt "                   Buffer Hit Ratio = $BUFFER_HIT_RATIO"
-	echoprt "               In-Memory Sort Ratio = $INMEMORY_SORT_RATIO"
-	echoprt "              Log Switches    Total = $AWR_LOG_SWITCHES_TOTAL"
-	echoprt "              Log Switches Per Hour = $AWR_LOG_SWITCHES_PERHOUR"
-	echoprt "         Top 5 Timed Event1    Name = $TOP5EVENT1_NAME"
-	echoprt "         Top 5 Timed Event1   Class = $TOP5EVENT1_CLASS"
-	echoprt "         Top 5 Timed Event1   Waits = $TOP5EVENT1_WAITS"
-	echoprt "         Top 5 Timed Event1 Time ms = $TOP5EVENT1_TIME"
-	echoprt "         Top 5 Timed Event1 Average = $TOP5EVENT1_AVERAGE"
-	echoprt "         Top 5 Timed Event1 %DBTime = $TOP5EVENT1_PCT_DBTIME"
-	echoprt "         Top 5 Timed Event2    Name = $TOP5EVENT2_NAME"
-	echoprt "         Top 5 Timed Event2   Class = $TOP5EVENT2_CLASS"
-	echoprt "         Top 5 Timed Event2   Waits = $TOP5EVENT2_WAITS"
-	echoprt "         Top 5 Timed Event2 Time ms = $TOP5EVENT2_TIME"
-	echoprt "         Top 5 Timed Event2 Average = $TOP5EVENT2_AVERAGE"
-	echoprt "         Top 5 Timed Event2 %DBTime = $TOP5EVENT2_PCT_DBTIME"
-	echoprt "         Top 5 Timed Event3    Name = $TOP5EVENT3_NAME"
-	echoprt "         Top 5 Timed Event3   Class = $TOP5EVENT3_CLASS"
-	echoprt "         Top 5 Timed Event3   Waits = $TOP5EVENT3_WAITS"
-	echoprt "         Top 5 Timed Event3 Time ms = $TOP5EVENT3_TIME"
-	echoprt "         Top 5 Timed Event3 Average = $TOP5EVENT3_AVERAGE"
-	echoprt "         Top 5 Timed Event3 %DBTime = $TOP5EVENT3_PCT_DBTIME"
-	echoprt "         Top 5 Timed Event4    Name = $TOP5EVENT4_NAME"
-	echoprt "         Top 5 Timed Event4   Class = $TOP5EVENT4_CLASS"
-	echoprt "         Top 5 Timed Event4   Waits = $TOP5EVENT4_WAITS"
-	echoprt "         Top 5 Timed Event4 Time ms = $TOP5EVENT4_TIME"
-	echoprt "         Top 5 Timed Event4 Average = $TOP5EVENT4_AVERAGE"
-	echoprt "         Top 5 Timed Event4 %DBTime = $TOP5EVENT4_PCT_DBTIME"
-	echoprt "         Top 5 Timed Event5    Name = $TOP5EVENT5_NAME"
-	echoprt "         Top 5 Timed Event5   Class = $TOP5EVENT5_CLASS"
-	echoprt "         Top 5 Timed Event5   Waits = $TOP5EVENT5_WAITS"
-	echoprt "         Top 5 Timed Event5 Time ms = $TOP5EVENT5_TIME"
-	echoprt "         Top 5 Timed Event5 Average = $TOP5EVENT5_AVERAGE"
-	echoprt "         Top 5 Timed Event5 %DBTime = $TOP5EVENT5_PCT_DBTIME"
-	echoprt "FG db file sequential read    Waits = $WAIT_DFSR_WAITS"
-	echoprt "FG db file sequential read  Time ms = $WAIT_DFSR_TIME"
-	echoprt "FG db file sequential read  Average = $WAIT_DFSR_AVERAGE"
-	echoprt "FG db file sequential read  %DBTime = $WAIT_DFSR_PCT_DBTIME"
-	echoprt "FG db file scattered read     Waits = $WAIT_DFXR_WAITS"
-	echoprt "FG db file scattered read   Time ms = $WAIT_DFXR_TIME"
-	echoprt "FG db file scattered read   Average = $WAIT_DFXR_AVERAGE"
-	echoprt "FG db file scattered read   %DBTime = $WAIT_DFXR_PCT_DBTIME"
-	echoprt "FG direct path read           Waits = $WAIT_DPRD_WAITS"
-	echoprt "FG direct path read         Time ms = $WAIT_DPRD_TIME"
-	echoprt "FG direct path read         Average = $WAIT_DPRD_AVERAGE"
-	echoprt "FG direct path read         %DBTime = $WAIT_DPRD_PCT_DBTIME"
-	echoprt "FG direct path write          Waits = $WAIT_DPWR_WAITS"
-	echoprt "FG direct path write        Time ms = $WAIT_DPWR_TIME"
-	echoprt "FG direct path write        Average = $WAIT_DPWR_AVERAGE"
-	echoprt "FG direct path write        %DBTime = $WAIT_DPWR_PCT_DBTIME"
-	echoprt "FG direct path read temp      Waits = $WAIT_DPRT_WAITS"
-	echoprt "FG direct path read temp    Time ms = $WAIT_DPRT_TIME"
-	echoprt "FG direct path read temp    Average = $WAIT_DPRT_AVERAGE"
-	echoprt "FG direct path read temp    %DBTime = $WAIT_DPRT_PCT_DBTIME"
-	echoprt "FG direct path write temp     Waits = $WAIT_DPWT_WAITS"
-	echoprt "FG direct path write temp   Time ms = $WAIT_DPWT_TIME"
-	echoprt "FG direct path write temp   Average = $WAIT_DPWT_AVERAGE"
-	echoprt "FG direct path write temp   %DBTime = $WAIT_DPWT_PCT_DBTIME"
-	echoprt "FG log file sync              Waits = $WAIT_LFSY_WAITS"
-	echoprt "FG log file sync            Time ms = $WAIT_LFSY_TIME"
-	echoprt "FG log file sync            Average = $WAIT_LFSY_AVERAGE"
-	echoprt "FG log file sync            %DBTime = $WAIT_LFSY_PCT_DBTIME"
-	echoprt "BG db file parallel write     Waits = $WAIT_DFPW_WAITS"
-	echoprt "BG db file parallel write   Time ms = $WAIT_DFPW_TIME"
-	echoprt "BG db file parallel write   Average = $WAIT_DFPW_AVERAGE"
-	echoprt "BG db file parallel write   %BGTime = $WAIT_DFPW_PCT_DBTIME"
-	echoprt "BG log file parallel write    Waits = $WAIT_LFPW_WAITS"
-	echoprt "BG log file parallel write  Time ms = $WAIT_LFPW_TIME"
-	echoprt "BG log file parallel write  Average = $WAIT_LFPW_AVERAGE"
-	echoprt "BG log file parallel write  %BGTime = $WAIT_LFPW_PCT_DBTIME"
-	echoprt "BG log file sequential read   Waits = $WAIT_LFSR_WAITS"
-	echoprt "BG log file sequential read Time ms = $WAIT_LFSR_TIME"
-	echoprt "BG log file sequential read Average = $WAIT_LFSR_AVERAGE"
-	echoprt "BG log file sequential read %BGTime = $WAIT_LFSR_PCT_DBTIME"
-	echoprt "OS busy time              (sec/100) = $OS_BUSY_TIME"
-	echoprt "OS idle time              (sec/100) = $OS_IDLE_TIME"
-	echoprt "OS iowait time            (sec/100) = $OS_IOWAIT_TIME"
-	echoprt "OS sys time               (sec/100) = $OS_SYS_TIME"
-	echoprt "OS user time              (sec/100) = $OS_USER_TIME"
-	echoprt "OS cpu wait time          (sec/100) = $OS_CPU_WAIT_TIME"
-	echoprt "OS resource mgr wait time (sec/100) = $OS_RSRC_MGR_WAIT_TIME"
-	echoprt "                 Data Guard in use? = $DATA_GUARD_FLAG"
-	echoprt "                    Exadata in use? = $EXADATA_FLAG"
-	echoprt "        Wait Class Admin  Num Waits = $WCLASS_ADMIN_NUM_WAITS"
-	echoprt "        Wait Class Admin  Wait Time = $WCLASS_ADMIN_WAIT_TIME"
-	echoprt "        Wait Class Admin Latency ms = $WCLASS_ADMIN_AVEWAIT"
-	echoprt "        Wait Class Admin    %DBTime = $WCLASS_ADMIN_PCT_DBTIME"
-	echoprt "  Wait Class Application  Num Waits = $WCLASS_APPLN_NUM_WAITS"
-	echoprt "  Wait Class Application  Wait Time = $WCLASS_APPLN_WAIT_TIME"
-	echoprt "  Wait Class Application Latency ms = $WCLASS_APPLN_AVEWAIT"
-	echoprt "  Wait Class Application    %DBTime = $WCLASS_APPLN_PCT_DBTIME"
-	echoprt "      Wait Class Cluster  Num Waits = $WCLASS_CLSTR_NUM_WAITS"
-	echoprt "      Wait Class Cluster  Wait Time = $WCLASS_CLSTR_WAIT_TIME"
-	echoprt "      Wait Class Cluster Latency ms = $WCLASS_CLSTR_AVEWAIT"
-	echoprt "      Wait Class Cluster    %DBTime = $WCLASS_CLSTR_PCT_DBTIME"
-	echoprt "       Wait Class Commit  Num Waits = $WCLASS_COMMT_NUM_WAITS"
-	echoprt "       Wait Class Commit  Wait Time = $WCLASS_COMMT_WAIT_TIME"
-	echoprt "       Wait Class Commit Latency ms = $WCLASS_COMMT_AVEWAIT"
-	echoprt "       Wait Class Commit    %DBTime = $WCLASS_COMMT_PCT_DBTIME"
-	echoprt "  Wait Class Concurrency  Num Waits = $WCLASS_CNCUR_NUM_WAITS"
-	echoprt "  Wait Class Concurrency  Wait Time = $WCLASS_CNCUR_WAIT_TIME"
-	echoprt "  Wait Class Concurrency Latency ms = $WCLASS_CNCUR_AVEWAIT"
-	echoprt "  Wait Class Concurrency    %DBTime = $WCLASS_CNCUR_PCT_DBTIME"
-	echoprt "Wait Class Configuration  Num Waits = $WCLASS_CONFG_NUM_WAITS"
-	echoprt "Wait Class Configuration  Wait Time = $WCLASS_CONFG_WAIT_TIME"
-	echoprt "Wait Class Configuration Latency ms = $WCLASS_CONFG_AVEWAIT"
-	echoprt "Wait Class Configuration    %DBTime = $WCLASS_CONFG_PCT_DBTIME"
-	echoprt "      Wait Class Network  Num Waits = $WCLASS_NETWK_NUM_WAITS"
-	echoprt "      Wait Class Network  Wait Time = $WCLASS_NETWK_WAIT_TIME"
-	echoprt "      Wait Class Network Latency ms = $WCLASS_NETWK_AVEWAIT"
-	echoprt "      Wait Class Network    %DBTime = $WCLASS_NETWK_PCT_DBTIME"
-	echoprt "        Wait Class Other  Num Waits = $WCLASS_OTHER_NUM_WAITS"
-	echoprt "        Wait Class Other  Wait Time = $WCLASS_OTHER_WAIT_TIME"
-	echoprt "        Wait Class Other Latency ms = $WCLASS_OTHER_AVEWAIT"
-	echoprt "        Wait Class Other    %DBTime = $WCLASS_OTHER_PCT_DBTIME"
-	echoprt "    Wait Class System IO  Num Waits = $WCLASS_SYSIO_NUM_WAITS"
-	echoprt "    Wait Class System IO  Wait Time = $WCLASS_SYSIO_WAIT_TIME"
-	echoprt "    Wait Class System IO Latency ms = $WCLASS_SYSIO_AVEWAIT"
-	echoprt "    Wait Class System IO    %DBTime = $WCLASS_SYSIO_PCT_DBTIME"
+	echoprt "                                Filename = $AWRFILENAME"
+	echoprt "                              AWR Format = $AWR_FORMAT"
+	echoprt "                           Database Name = $PROFILE_DBNAME"
+	echoprt "                         Instance Number = $PROFILE_INSTANCENUM"
+	echoprt "                           Instance Name = $PROFILE_INSTANCENAME"
+	echoprt "                        Database Version = $PROFILE_DBVERSION"
+	echoprt "                             Cluster Y/N = $PROFILE_CLUSTER"
+	echoprt "                                Hostname = $DB_HOSTNAME"
+	echoprt "                                 Host OS = $DB_HOST_OS"
+	echoprt "                          Number of CPUs = $DB_NUM_CPUS"
+	echoprt "                           Server Memory = $DB_HOST_MEM"
+	echoprt "                            DB Blocksize = $DB_BLOCK_SIZE"
+	echoprt "                              Begin Snap = $AWR_BEGIN_SNAP"
+	echoprt "                              Begin Time = $AWR_BEGIN_TIME"
+	echoprt "                                End Snap = $AWR_END_SNAP"
+	echoprt "                                End Time = $AWR_END_TIME"
+	echoprt "                            Elapsed Time = $AWR_ELAPSED_TIME"
+	echoprt "                                 DB Time = $AWR_DB_TIME"
+	echoprt "                                     AAS = $AWR_AAS"
+	echoprt "                                   Busy? = $AWR_BUSY_FLAG"
+	echoprt "                       Logical Reads/sec = $AWR_LOGICAL_READS"
+	echoprt "                       Block Changes/sec = $AWR_BLOCK_CHANGES"
+	echoprt "                               Read IOPS = $READ_IOPS"
+	echoprt "                         Data Write IOPS = $DATA_WRITE_IOPS"
+	echoprt "                         Redo Write IOPS = $REDO_WRITE_IOPS"
+	echoprt "                        Total Write IOPS = $ALL_WRITE_IOPS"
+	echoprt "                              Total IOPS = $TOTAL_IOPS"
+	echoprt "               Read Throughput (MiB/sec) = $READ_THROUGHPUT"
+	echoprt "         Data Write Throughput (MiB/sec) = $DATA_WRITE_THROUGHPUT"
+	echoprt "         Redo Write Throughput (MiB/sec) = $REDO_WRITE_THROUGHPUT"
+	echoprt "        Total Write Throughput (MiB/sec) = $ALL_WRITE_THROUGHPUT"
+	echoprt "              Total Throughput (MiB/sec) = $TOTAL_THROUGHPUT"
+	echoprt "                          DB CPU Time ms = $AWR_DB_CPU"
+	echoprt "                          DB CPU %DBTime = $AWR_DB_CPU_PCT_DBTIME"
+	echoprt "           Wait Class User IO  Num Waits = $WCLASS_USRIO_NUM_WAITS"
+	echoprt "           Wait Class User IO  Wait Time = $WCLASS_USRIO_WAIT_TIME"
+	echoprt "           Wait Class User IO Latency ms = $WCLASS_USRIO_AVEWAIT"
+	echoprt "           Wait Class User IO    %DBTime = $WCLASS_USRIO_PCT_DBTIME"
+	echoprt "                          User Calls/sec = $AWR_USER_CALLS"
+	echoprt "                              Parses/sec = $AWR_PARSES"
+	echoprt "                         Hard Parses/sec = $AWR_HARD_PARSES"
+	echoprt "                              Logons/sec = $AWR_LOGONS"
+	echoprt "                            Executes/sec = $AWR_EXECUTES"
+	echoprt "                        Transactions/sec = $AWR_TRANSACTIONS"
+	echoprt "                        Buffer Hit Ratio = $BUFFER_HIT_RATIO"
+	echoprt "                    In-Memory Sort Ratio = $INMEMORY_SORT_RATIO"
+	echoprt "                   Log Switches    Total = $AWR_LOG_SWITCHES_TOTAL"
+	echoprt "                   Log Switches Per Hour = $AWR_LOG_SWITCHES_PERHOUR"
+	echoprt "              Top 5 Timed Event1    Name = $TOP5EVENT1_NAME"
+	echoprt "              Top 5 Timed Event1   Class = $TOP5EVENT1_CLASS"
+	echoprt "              Top 5 Timed Event1   Waits = $TOP5EVENT1_WAITS"
+	echoprt "              Top 5 Timed Event1 Time ms = $TOP5EVENT1_TIME"
+	echoprt "              Top 5 Timed Event1 Average = $TOP5EVENT1_AVERAGE"
+	echoprt "              Top 5 Timed Event1 %DBTime = $TOP5EVENT1_PCT_DBTIME"
+	echoprt "              Top 5 Timed Event2    Name = $TOP5EVENT2_NAME"
+	echoprt "              Top 5 Timed Event2   Class = $TOP5EVENT2_CLASS"
+	echoprt "              Top 5 Timed Event2   Waits = $TOP5EVENT2_WAITS"
+	echoprt "              Top 5 Timed Event2 Time ms = $TOP5EVENT2_TIME"
+	echoprt "              Top 5 Timed Event2 Average = $TOP5EVENT2_AVERAGE"
+	echoprt "              Top 5 Timed Event2 %DBTime = $TOP5EVENT2_PCT_DBTIME"
+	echoprt "              Top 5 Timed Event3    Name = $TOP5EVENT3_NAME"
+	echoprt "              Top 5 Timed Event3   Class = $TOP5EVENT3_CLASS"
+	echoprt "              Top 5 Timed Event3   Waits = $TOP5EVENT3_WAITS"
+	echoprt "              Top 5 Timed Event3 Time ms = $TOP5EVENT3_TIME"
+	echoprt "              Top 5 Timed Event3 Average = $TOP5EVENT3_AVERAGE"
+	echoprt "              Top 5 Timed Event3 %DBTime = $TOP5EVENT3_PCT_DBTIME"
+	echoprt "              Top 5 Timed Event4    Name = $TOP5EVENT4_NAME"
+	echoprt "              Top 5 Timed Event4   Class = $TOP5EVENT4_CLASS"
+	echoprt "              Top 5 Timed Event4   Waits = $TOP5EVENT4_WAITS"
+	echoprt "              Top 5 Timed Event4 Time ms = $TOP5EVENT4_TIME"
+	echoprt "              Top 5 Timed Event4 Average = $TOP5EVENT4_AVERAGE"
+	echoprt "              Top 5 Timed Event4 %DBTime = $TOP5EVENT4_PCT_DBTIME"
+	echoprt "              Top 5 Timed Event5    Name = $TOP5EVENT5_NAME"
+	echoprt "              Top 5 Timed Event5   Class = $TOP5EVENT5_CLASS"
+	echoprt "              Top 5 Timed Event5   Waits = $TOP5EVENT5_WAITS"
+	echoprt "              Top 5 Timed Event5 Time ms = $TOP5EVENT5_TIME"
+	echoprt "              Top 5 Timed Event5 Average = $TOP5EVENT5_AVERAGE"
+	echoprt "              Top 5 Timed Event5 %DBTime = $TOP5EVENT5_PCT_DBTIME"
+	echoprt "     FG db file sequential read    Waits = $WAIT_DFSR_WAITS"
+	echoprt "     FG db file sequential read  Time ms = $WAIT_DFSR_TIME"
+	echoprt "     FG db file sequential read  Average = $WAIT_DFSR_AVERAGE"
+	echoprt "     FG db file sequential read  %DBTime = $WAIT_DFSR_PCT_DBTIME"
+	echoprt "     FG db file scattered read     Waits = $WAIT_DFXR_WAITS"
+	echoprt "     FG db file scattered read   Time ms = $WAIT_DFXR_TIME"
+	echoprt "     FG db file scattered read   Average = $WAIT_DFXR_AVERAGE"
+	echoprt "     FG db file scattered read   %DBTime = $WAIT_DFXR_PCT_DBTIME"
+	echoprt "     FG direct path read           Waits = $WAIT_DPRD_WAITS"
+	echoprt "     FG direct path read         Time ms = $WAIT_DPRD_TIME"
+	echoprt "     FG direct path read         Average = $WAIT_DPRD_AVERAGE"
+	echoprt "     FG direct path read         %DBTime = $WAIT_DPRD_PCT_DBTIME"
+	echoprt "     FG direct path write          Waits = $WAIT_DPWR_WAITS"
+	echoprt "     FG direct path write        Time ms = $WAIT_DPWR_TIME"
+	echoprt "     FG direct path write        Average = $WAIT_DPWR_AVERAGE"
+	echoprt "     FG direct path write        %DBTime = $WAIT_DPWR_PCT_DBTIME"
+	echoprt "     FG direct path read temp      Waits = $WAIT_DPRT_WAITS"
+	echoprt "     FG direct path read temp    Time ms = $WAIT_DPRT_TIME"
+	echoprt "     FG direct path read temp    Average = $WAIT_DPRT_AVERAGE"
+	echoprt "     FG direct path read temp    %DBTime = $WAIT_DPRT_PCT_DBTIME"
+	echoprt "     FG direct path write temp     Waits = $WAIT_DPWT_WAITS"
+	echoprt "     FG direct path write temp   Time ms = $WAIT_DPWT_TIME"
+	echoprt "     FG direct path write temp   Average = $WAIT_DPWT_AVERAGE"
+	echoprt "     FG direct path write temp   %DBTime = $WAIT_DPWT_PCT_DBTIME"
+	echoprt "     FG log file sync              Waits = $WAIT_LFSY_WAITS"
+	echoprt "     FG log file sync            Time ms = $WAIT_LFSY_TIME"
+	echoprt "     FG log file sync            Average = $WAIT_LFSY_AVERAGE"
+	echoprt "     FG log file sync            %DBTime = $WAIT_LFSY_PCT_DBTIME"
+	echoprt "     BG db file parallel write     Waits = $WAIT_DFPW_WAITS"
+	echoprt "     BG db file parallel write   Time ms = $WAIT_DFPW_TIME"
+	echoprt "     BG db file parallel write   Average = $WAIT_DFPW_AVERAGE"
+	echoprt "     BG db file parallel write   %BGTime = $WAIT_DFPW_PCT_DBTIME"
+	echoprt "     BG log file parallel write    Waits = $WAIT_LFPW_WAITS"
+	echoprt "     BG log file parallel write  Time ms = $WAIT_LFPW_TIME"
+	echoprt "     BG log file parallel write  Average = $WAIT_LFPW_AVERAGE"
+	echoprt "     BG log file parallel write  %BGTime = $WAIT_LFPW_PCT_DBTIME"
+	echoprt "     BG log file sequential read   Waits = $WAIT_LFSR_WAITS"
+	echoprt "     BG log file sequential read Time ms = $WAIT_LFSR_TIME"
+	echoprt "     BG log file sequential read Average = $WAIT_LFSR_AVERAGE"
+	echoprt "     BG log file sequential read %BGTime = $WAIT_LFSR_PCT_DBTIME"
+	echoprt "     OS busy time              (sec/100) = $OS_BUSY_TIME"
+	echoprt "     OS idle time              (sec/100) = $OS_IDLE_TIME"
+	echoprt "     OS iowait time            (sec/100) = $OS_IOWAIT_TIME"
+	echoprt "     OS sys time               (sec/100) = $OS_SYS_TIME"
+	echoprt "     OS user time              (sec/100) = $OS_USER_TIME"
+	echoprt "     OS cpu wait time          (sec/100) = $OS_CPU_WAIT_TIME"
+	echoprt "     OS resource mgr wait time (sec/100) = $OS_RSRC_MGR_WAIT_TIME"
+	echoprt "                      Data Guard in use? = $DATA_GUARD_FLAG"
+	echoprt "                         Exadata in use? = $EXADATA_FLAG"
+	echoprt "             Wait Class Admin  Num Waits = $WCLASS_ADMIN_NUM_WAITS"
+	echoprt "             Wait Class Admin  Wait Time = $WCLASS_ADMIN_WAIT_TIME"
+	echoprt "             Wait Class Admin Latency ms = $WCLASS_ADMIN_AVEWAIT"
+	echoprt "             Wait Class Admin    %DBTime = $WCLASS_ADMIN_PCT_DBTIME"
+	echoprt "       Wait Class Application  Num Waits = $WCLASS_APPLN_NUM_WAITS"
+	echoprt "       Wait Class Application  Wait Time = $WCLASS_APPLN_WAIT_TIME"
+	echoprt "       Wait Class Application Latency ms = $WCLASS_APPLN_AVEWAIT"
+	echoprt "       Wait Class Application    %DBTime = $WCLASS_APPLN_PCT_DBTIME"
+	echoprt "           Wait Class Cluster  Num Waits = $WCLASS_CLSTR_NUM_WAITS"
+	echoprt "           Wait Class Cluster  Wait Time = $WCLASS_CLSTR_WAIT_TIME"
+	echoprt "           Wait Class Cluster Latency ms = $WCLASS_CLSTR_AVEWAIT"
+	echoprt "           Wait Class Cluster    %DBTime = $WCLASS_CLSTR_PCT_DBTIME"
+	echoprt "            Wait Class Commit  Num Waits = $WCLASS_COMMT_NUM_WAITS"
+	echoprt "            Wait Class Commit  Wait Time = $WCLASS_COMMT_WAIT_TIME"
+	echoprt "            Wait Class Commit Latency ms = $WCLASS_COMMT_AVEWAIT"
+	echoprt "            Wait Class Commit    %DBTime = $WCLASS_COMMT_PCT_DBTIME"
+	echoprt "       Wait Class Concurrency  Num Waits = $WCLASS_CNCUR_NUM_WAITS"
+	echoprt "       Wait Class Concurrency  Wait Time = $WCLASS_CNCUR_WAIT_TIME"
+	echoprt "       Wait Class Concurrency Latency ms = $WCLASS_CNCUR_AVEWAIT"
+	echoprt "       Wait Class Concurrency    %DBTime = $WCLASS_CNCUR_PCT_DBTIME"
+	echoprt "     Wait Class Configuration  Num Waits = $WCLASS_CONFG_NUM_WAITS"
+	echoprt "     Wait Class Configuration  Wait Time = $WCLASS_CONFG_WAIT_TIME"
+	echoprt "     Wait Class Configuration Latency ms = $WCLASS_CONFG_AVEWAIT"
+	echoprt "     Wait Class Configuration    %DBTime = $WCLASS_CONFG_PCT_DBTIME"
+	echoprt "           Wait Class Network  Num Waits = $WCLASS_NETWK_NUM_WAITS"
+	echoprt "           Wait Class Network  Wait Time = $WCLASS_NETWK_WAIT_TIME"
+	echoprt "           Wait Class Network Latency ms = $WCLASS_NETWK_AVEWAIT"
+	echoprt "           Wait Class Network    %DBTime = $WCLASS_NETWK_PCT_DBTIME"
+	echoprt "             Wait Class Other  Num Waits = $WCLASS_OTHER_NUM_WAITS"
+	echoprt "             Wait Class Other  Wait Time = $WCLASS_OTHER_WAIT_TIME"
+	echoprt "             Wait Class Other Latency ms = $WCLASS_OTHER_AVEWAIT"
+	echoprt "             Wait Class Other    %DBTime = $WCLASS_OTHER_PCT_DBTIME"
+	echoprt "         Wait Class System IO  Num Waits = $WCLASS_SYSIO_NUM_WAITS"
+	echoprt "         Wait Class System IO  Wait Time = $WCLASS_SYSIO_WAIT_TIME"
+	echoprt "         Wait Class System IO Latency ms = $WCLASS_SYSIO_AVEWAIT"
+	echoprt "         Wait Class System IO    %DBTime = $WCLASS_SYSIO_PCT_DBTIME"
+	echoprt " Histogram db file sequential read  <1ms = $HGRM_DFSR_1MS"
+	echoprt " Histogram db file sequential read  <2ms = $HGRM_DFSR_2MS"
+	echoprt " Histogram db file sequential read  <4ms = $HGRM_DFSR_4MS"
+	echoprt " Histogram db file sequential read  <8ms = $HGRM_DFSR_8MS"
+	echoprt " Histogram db file sequential read <16ms = $HGRM_DFSR_16MS"
+	echoprt " Histogram db file sequential read <32ms = $HGRM_DFSR_32MS"
+	echoprt " Histogram db file sequential read   <1s = $HGRM_DFSR_LT1S"
+	echoprt " Histogram db file sequential read   >1s = $HGRM_DFSR_GT1S"
+	echoprt " Histogram log file parallel write  <1ms = $HGRM_LFPW_1MS"
+	echoprt " Histogram log file parallel write  <2ms = $HGRM_LFPW_2MS"
+	echoprt " Histogram log file parallel write  <4ms = $HGRM_LFPW_4MS"
+	echoprt " Histogram log file parallel write  <8ms = $HGRM_LFPW_8MS"
+	echoprt " Histogram log file parallel write <16ms = $HGRM_LFPW_16MS"
+	echoprt " Histogram log file parallel write <32ms = $HGRM_LFPW_32MS"
+	echoprt " Histogram log file parallel write   <1s = $HGRM_LFPW_LT1S"
+	echoprt " Histogram log file parallel write   >1s = $HGRM_LFPW_GT1S"
 }
 
 # Start of main program - check that parameters have been passed in
@@ -1945,6 +2054,7 @@ while (( "$#" )); do
 			unset TOP5EVENT1_NAME TOP5EVENT1_CLASS TOP5EVENT1_WAITS TOP5EVENT1_TIME TOP5EVENT1_AVERAGE TOP5EVENT1_PCT_DBTIME TOP5EVENT2_NAME TOP5EVENT2_CLASS TOP5EVENT2_WAITS TOP5EVENT2_TIME TOP5EVENT2_AVERAGE TOP5EVENT2_PCT_DBTIME TOP5EVENT3_NAME TOP5EVENT3_CLASS TOP5EVENT3_WAITS TOP5EVENT3_TIME TOP5EVENT3_AVERAGE TOP5EVENT3_PCT_DBTIME TOP5EVENT4_NAME TOP5EVENT4_CLASS TOP5EVENT4_WAITS TOP5EVENT4_TIME TOP5EVENT4_AVERAGE TOP5EVENT4_PCT_DBTIME TOP5EVENT5_NAME TOP5EVENT5_CLASS TOP5EVENT5_WAITS TOP5EVENT5_TIME TOP5EVENT5_AVERAGE TOP5EVENT5_PCT_DBTIME
 			unset WAIT_DFSR_WAITS WAIT_DFSR_TIME WAIT_DFSR_AVERAGE WAIT_DFSR_PCT_DBTIME WAIT_DFXR_WAITS WAIT_DFXR_TIME WAIT_DFXR_AVERAGE WAIT_DFXR_PCT_DBTIME WAIT_DPRD_WAITS WAIT_DPRD_TIME WAIT_DPRD_AVERAGE WAIT_DPRD_PCT_DBTIME WAIT_DPWR_WAITS WAIT_DPWR_TIME WAIT_DPWR_AVERAGE WAIT_DPWR_PCT_DBTIME WAIT_DPRT_WAITS WAIT_DPRT_TIME WAIT_DPRT_AVERAGE WAIT_DPRT_PCT_DBTIME WAIT_DPWT_WAITS WAIT_DPWT_TIME WAIT_DPWT_AVERAGE WAIT_DPWT_PCT_DBTIME WAIT_LFSY_WAITS WAIT_LFSY_TIME WAIT_LFSY_AVERAGE WAIT_LFSY_PCT_DBTIME WAIT_DFPW_WAITS WAIT_DFPW_TIME WAIT_DFPW_AVERAGE WAIT_DFPW_PCT_DBTIME WAIT_LFPW_WAITS WAIT_LFPW_TIME WAIT_LFPW_AVERAGE WAIT_LFPW_PCT_DBTIME WAIT_LFSR_WAITS WAIT_LFSR_TIME WAIT_LFSR_AVERAGE WAIT_LFSR_PCT_DBTIME
 			unset OS_BUSY_TIME OS_IDLE_TIME OS_IOWAIT_TIME OS_SYS_TIME OS_USER_TIME OS_CPU_WAIT_TIME OS_RSRC_MGR_WAIT_TIME DATA_GUARD_FLAG EXADATA_FLAG WCLASS_ADMIN_NUM_WAITS WCLASS_ADMIN_WAIT_TIME WCLASS_ADMIN_AVEWAIT WCLASS_ADMIN_PCT_DBTIME WCLASS_APPLN_NUM_WAITS WCLASS_APPLN_WAIT_TIME WCLASS_APPLN_AVEWAIT WCLASS_APPLN_PCT_DBTIME WCLASS_CLSTR_NUM_WAITS WCLASS_CLSTR_WAIT_TIME WCLASS_CLSTR_AVEWAIT WCLASS_CLSTR_PCT_DBTIME WCLASS_COMMT_NUM_WAITS WCLASS_COMMT_WAIT_TIME WCLASS_COMMT_AVEWAIT WCLASS_COMMT_PCT_DBTIME WCLASS_CNCUR_NUM_WAITS WCLASS_CNCUR_WAIT_TIME WCLASS_CNCUR_AVEWAIT WCLASS_CNCUR_PCT_DBTIME WCLASS_CONFG_NUM_WAITS WCLASS_CONFG_WAIT_TIME WCLASS_CONFG_AVEWAIT WCLASS_CONFG_PCT_DBTIME WCLASS_NETWK_NUM_WAITS WCLASS_NETWK_WAIT_TIME WCLASS_NETWK_AVEWAIT WCLASS_NETWK_PCT_DBTIME WCLASS_OTHER_NUM_WAITS WCLASS_OTHER_WAIT_TIME WCLASS_OTHER_AVEWAIT WCLASS_OTHER_PCT_DBTIME WCLASS_SYSIO_NUM_WAITS WCLASS_SYSIO_WAIT_TIME WCLASS_SYSIO_AVEWAIT WCLASS_SYSIO_PCT_DBTIME
+			unset HGRM_DFSR_1MS HGRM_DFSR_2MS HGRM_DFSR_4MS HGRM_DFSR_8MS HGRM_DFSR_16MS HGRM_DFSR_32MS HGRM_DFSR_LT1S HGRM_DFSR_GT1S HGRM_LFPW_1MS HGRM_LFPW_2MS HGRM_LFPW_4MS HGRM_LFPW_8MS HGRM_LFPW_16MS HGRM_LFPW_32MS HGRM_LFPW_LT1S HGRM_LFPW_GT1S
 			# Set Data Guard and Exadata flags to N
 			DATA_GUARD_FLAG="N"
 			EXADATA_FLAG="N"
@@ -1955,7 +2065,7 @@ while (( "$#" )); do
 			# Print harvested information to errinf function
 			[[ "$PRINT_REPORT_INFO" = 1 ]] && print_report_info
 			# Write values to CSV file
-			echocsv "$AWRFILENAME,$PROFILE_DBNAME,$PROFILE_INSTANCENUM,$PROFILE_INSTANCENAME,$PROFILE_DBVERSION,$PROFILE_CLUSTER,$DB_HOSTNAME,$DB_HOST_OS,$DB_NUM_CPUS,$DB_HOST_MEM,$DB_BLOCK_SIZE,$AWR_BEGIN_SNAP,$AWR_BEGIN_TIME,$AWR_END_SNAP,$AWR_END_TIME,$AWR_ELAPSED_TIME,$AWR_DB_TIME,$AWR_AAS,$AWR_BUSY_FLAG,$AWR_LOGICAL_READS,$AWR_BLOCK_CHANGES,$READ_IOPS,$DATA_WRITE_IOPS,$REDO_WRITE_IOPS,$ALL_WRITE_IOPS,$TOTAL_IOPS,$READ_THROUGHPUT,$DATA_WRITE_THROUGHPUT,$REDO_WRITE_THROUGHPUT,$ALL_WRITE_THROUGHPUT,$TOTAL_THROUGHPUT,$AWR_DB_CPU,$AWR_DB_CPU_PCT_DBTIME,$WCLASS_USRIO_NUM_WAITS,$WCLASS_USRIO_WAIT_TIME,$WCLASS_USRIO_AVEWAIT,$WCLASS_USRIO_PCT_DBTIME,$AWR_USER_CALLS,$AWR_PARSES,$AWR_HARD_PARSES,$AWR_LOGONS,$AWR_EXECUTES,$AWR_TRANSACTIONS,$BUFFER_HIT_RATIO,$INMEMORY_SORT_RATIO,$AWR_LOG_SWITCHES_TOTAL,$AWR_LOG_SWITCHES_PERHOUR,$TOP5EVENT1_NAME,$TOP5EVENT1_CLASS,$TOP5EVENT1_WAITS,$TOP5EVENT1_TIME,$TOP5EVENT1_AVERAGE,$TOP5EVENT1_PCT_DBTIME,$TOP5EVENT2_NAME,$TOP5EVENT2_CLASS,$TOP5EVENT2_WAITS,$TOP5EVENT2_TIME,$TOP5EVENT2_AVERAGE,$TOP5EVENT2_PCT_DBTIME,$TOP5EVENT3_NAME,$TOP5EVENT3_CLASS,$TOP5EVENT3_WAITS,$TOP5EVENT3_TIME,$TOP5EVENT3_AVERAGE,$TOP5EVENT3_PCT_DBTIME,$TOP5EVENT4_NAME,$TOP5EVENT4_CLASS,$TOP5EVENT4_WAITS,$TOP5EVENT4_TIME,$TOP5EVENT4_AVERAGE,$TOP5EVENT4_PCT_DBTIME,$TOP5EVENT5_NAME,$TOP5EVENT5_CLASS,$TOP5EVENT5_WAITS,$TOP5EVENT5_TIME,$TOP5EVENT5_AVERAGE,$TOP5EVENT5_PCT_DBTIME,$WAIT_DFSR_WAITS,$WAIT_DFSR_TIME,$WAIT_DFSR_AVERAGE,$WAIT_DFSR_PCT_DBTIME,$WAIT_DFXR_WAITS,$WAIT_DFXR_TIME,$WAIT_DFXR_AVERAGE,$WAIT_DFXR_PCT_DBTIME,$WAIT_DPRD_WAITS,$WAIT_DPRD_TIME,$WAIT_DPRD_AVERAGE,$WAIT_DPRD_PCT_DBTIME,$WAIT_DPWR_WAITS,$WAIT_DPWR_TIME,$WAIT_DPWR_AVERAGE,$WAIT_DPWR_PCT_DBTIME,$WAIT_DPRT_WAITS,$WAIT_DPRT_TIME,$WAIT_DPRT_AVERAGE,$WAIT_DPRT_PCT_DBTIME,$WAIT_DPWT_WAITS,$WAIT_DPWT_TIME,$WAIT_DPWT_AVERAGE,$WAIT_DPWT_PCT_DBTIME,$WAIT_LFSY_WAITS,$WAIT_LFSY_TIME,$WAIT_LFSY_AVERAGE,$WAIT_LFSY_PCT_DBTIME,$WAIT_DFPW_WAITS,$WAIT_DFPW_TIME,$WAIT_DFPW_AVERAGE,$WAIT_DFPW_PCT_DBTIME,$WAIT_LFPW_WAITS,$WAIT_LFPW_TIME,$WAIT_LFPW_AVERAGE,$WAIT_LFPW_PCT_DBTIME,$WAIT_LFSR_WAITS,$WAIT_LFSR_TIME,$WAIT_LFSR_AVERAGE,$WAIT_LFSR_PCT_DBTIME,$OS_BUSY_TIME,$OS_IDLE_TIME,$OS_IOWAIT_TIME,$OS_SYS_TIME,$OS_USER_TIME,$OS_CPU_WAIT_TIME,$OS_RSRC_MGR_WAIT_TIME,$DATA_GUARD_FLAG,$EXADATA_FLAG,$WCLASS_ADMIN_NUM_WAITS,$WCLASS_ADMIN_WAIT_TIME,$WCLASS_ADMIN_AVEWAIT,$WCLASS_ADMIN_PCT_DBTIME,$WCLASS_APPLN_NUM_WAITS,$WCLASS_APPLN_WAIT_TIME,$WCLASS_APPLN_AVEWAIT,$WCLASS_APPLN_PCT_DBTIME,$WCLASS_CLSTR_NUM_WAITS,$WCLASS_CLSTR_WAIT_TIME,$WCLASS_CLSTR_AVEWAIT,$WCLASS_CLSTR_PCT_DBTIME,$WCLASS_COMMT_NUM_WAITS,$WCLASS_COMMT_WAIT_TIME,$WCLASS_COMMT_AVEWAIT,$WCLASS_COMMT_PCT_DBTIME,$WCLASS_CNCUR_NUM_WAITS,$WCLASS_CNCUR_WAIT_TIME,$WCLASS_CNCUR_AVEWAIT,$WCLASS_CNCUR_PCT_DBTIME,$WCLASS_CONFG_NUM_WAITS,$WCLASS_CONFG_WAIT_TIME,$WCLASS_CONFG_AVEWAIT,$WCLASS_CONFG_PCT_DBTIME,$WCLASS_NETWK_NUM_WAITS,$WCLASS_NETWK_WAIT_TIME,$WCLASS_NETWK_AVEWAIT,$WCLASS_NETWK_PCT_DBTIME,$WCLASS_OTHER_NUM_WAITS,$WCLASS_OTHER_WAIT_TIME,$WCLASS_OTHER_AVEWAIT,$WCLASS_OTHER_PCT_DBTIME,$WCLASS_SYSIO_NUM_WAITS,$WCLASS_SYSIO_WAIT_TIME,$WCLASS_SYSIO_AVEWAIT,$WCLASS_SYSIO_PCT_DBTIME"
+			echocsv "$AWRFILENAME,$PROFILE_DBNAME,$PROFILE_INSTANCENUM,$PROFILE_INSTANCENAME,$PROFILE_DBVERSION,$PROFILE_CLUSTER,$DB_HOSTNAME,$DB_HOST_OS,$DB_NUM_CPUS,$DB_HOST_MEM,$DB_BLOCK_SIZE,$AWR_BEGIN_SNAP,$AWR_BEGIN_TIME,$AWR_END_SNAP,$AWR_END_TIME,$AWR_ELAPSED_TIME,$AWR_DB_TIME,$AWR_AAS,$AWR_BUSY_FLAG,$AWR_LOGICAL_READS,$AWR_BLOCK_CHANGES,$READ_IOPS,$DATA_WRITE_IOPS,$REDO_WRITE_IOPS,$ALL_WRITE_IOPS,$TOTAL_IOPS,$READ_THROUGHPUT,$DATA_WRITE_THROUGHPUT,$REDO_WRITE_THROUGHPUT,$ALL_WRITE_THROUGHPUT,$TOTAL_THROUGHPUT,$AWR_DB_CPU,$AWR_DB_CPU_PCT_DBTIME,$WCLASS_USRIO_NUM_WAITS,$WCLASS_USRIO_WAIT_TIME,$WCLASS_USRIO_AVEWAIT,$WCLASS_USRIO_PCT_DBTIME,$AWR_USER_CALLS,$AWR_PARSES,$AWR_HARD_PARSES,$AWR_LOGONS,$AWR_EXECUTES,$AWR_TRANSACTIONS,$BUFFER_HIT_RATIO,$INMEMORY_SORT_RATIO,$AWR_LOG_SWITCHES_TOTAL,$AWR_LOG_SWITCHES_PERHOUR,$TOP5EVENT1_NAME,$TOP5EVENT1_CLASS,$TOP5EVENT1_WAITS,$TOP5EVENT1_TIME,$TOP5EVENT1_AVERAGE,$TOP5EVENT1_PCT_DBTIME,$TOP5EVENT2_NAME,$TOP5EVENT2_CLASS,$TOP5EVENT2_WAITS,$TOP5EVENT2_TIME,$TOP5EVENT2_AVERAGE,$TOP5EVENT2_PCT_DBTIME,$TOP5EVENT3_NAME,$TOP5EVENT3_CLASS,$TOP5EVENT3_WAITS,$TOP5EVENT3_TIME,$TOP5EVENT3_AVERAGE,$TOP5EVENT3_PCT_DBTIME,$TOP5EVENT4_NAME,$TOP5EVENT4_CLASS,$TOP5EVENT4_WAITS,$TOP5EVENT4_TIME,$TOP5EVENT4_AVERAGE,$TOP5EVENT4_PCT_DBTIME,$TOP5EVENT5_NAME,$TOP5EVENT5_CLASS,$TOP5EVENT5_WAITS,$TOP5EVENT5_TIME,$TOP5EVENT5_AVERAGE,$TOP5EVENT5_PCT_DBTIME,$WAIT_DFSR_WAITS,$WAIT_DFSR_TIME,$WAIT_DFSR_AVERAGE,$WAIT_DFSR_PCT_DBTIME,$WAIT_DFXR_WAITS,$WAIT_DFXR_TIME,$WAIT_DFXR_AVERAGE,$WAIT_DFXR_PCT_DBTIME,$WAIT_DPRD_WAITS,$WAIT_DPRD_TIME,$WAIT_DPRD_AVERAGE,$WAIT_DPRD_PCT_DBTIME,$WAIT_DPWR_WAITS,$WAIT_DPWR_TIME,$WAIT_DPWR_AVERAGE,$WAIT_DPWR_PCT_DBTIME,$WAIT_DPRT_WAITS,$WAIT_DPRT_TIME,$WAIT_DPRT_AVERAGE,$WAIT_DPRT_PCT_DBTIME,$WAIT_DPWT_WAITS,$WAIT_DPWT_TIME,$WAIT_DPWT_AVERAGE,$WAIT_DPWT_PCT_DBTIME,$WAIT_LFSY_WAITS,$WAIT_LFSY_TIME,$WAIT_LFSY_AVERAGE,$WAIT_LFSY_PCT_DBTIME,$WAIT_DFPW_WAITS,$WAIT_DFPW_TIME,$WAIT_DFPW_AVERAGE,$WAIT_DFPW_PCT_DBTIME,$WAIT_LFPW_WAITS,$WAIT_LFPW_TIME,$WAIT_LFPW_AVERAGE,$WAIT_LFPW_PCT_DBTIME,$WAIT_LFSR_WAITS,$WAIT_LFSR_TIME,$WAIT_LFSR_AVERAGE,$WAIT_LFSR_PCT_DBTIME,$OS_BUSY_TIME,$OS_IDLE_TIME,$OS_IOWAIT_TIME,$OS_SYS_TIME,$OS_USER_TIME,$OS_CPU_WAIT_TIME,$OS_RSRC_MGR_WAIT_TIME,$DATA_GUARD_FLAG,$EXADATA_FLAG,$WCLASS_ADMIN_NUM_WAITS,$WCLASS_ADMIN_WAIT_TIME,$WCLASS_ADMIN_AVEWAIT,$WCLASS_ADMIN_PCT_DBTIME,$WCLASS_APPLN_NUM_WAITS,$WCLASS_APPLN_WAIT_TIME,$WCLASS_APPLN_AVEWAIT,$WCLASS_APPLN_PCT_DBTIME,$WCLASS_CLSTR_NUM_WAITS,$WCLASS_CLSTR_WAIT_TIME,$WCLASS_CLSTR_AVEWAIT,$WCLASS_CLSTR_PCT_DBTIME,$WCLASS_COMMT_NUM_WAITS,$WCLASS_COMMT_WAIT_TIME,$WCLASS_COMMT_AVEWAIT,$WCLASS_COMMT_PCT_DBTIME,$WCLASS_CNCUR_NUM_WAITS,$WCLASS_CNCUR_WAIT_TIME,$WCLASS_CNCUR_AVEWAIT,$WCLASS_CNCUR_PCT_DBTIME,$WCLASS_CONFG_NUM_WAITS,$WCLASS_CONFG_WAIT_TIME,$WCLASS_CONFG_AVEWAIT,$WCLASS_CONFG_PCT_DBTIME,$WCLASS_NETWK_NUM_WAITS,$WCLASS_NETWK_WAIT_TIME,$WCLASS_NETWK_AVEWAIT,$WCLASS_NETWK_PCT_DBTIME,$WCLASS_OTHER_NUM_WAITS,$WCLASS_OTHER_WAIT_TIME,$WCLASS_OTHER_AVEWAIT,$WCLASS_OTHER_PCT_DBTIME,$WCLASS_SYSIO_NUM_WAITS,$WCLASS_SYSIO_WAIT_TIME,$WCLASS_SYSIO_AVEWAIT,$WCLASS_SYSIO_PCT_DBTIME,$HGRM_DFSR_1MS,$HGRM_DFSR_2MS,$HGRM_DFSR_4MS,$HGRM_DFSR_8MS,$HGRM_DFSR_16MS,$HGRM_DFSR_32MS,$HGRM_DFSR_LT1S,$HGRM_DFSR_GT1S,$HGRM_LFPW_1MS,$HGRM_LFPW_2MS,$HGRM_LFPW_4MS,$HGRM_LFPW_8MS,$HGRM_LFPW_16MS,$HGRM_LFPW_32MS,$HGRM_LFPW_LT1S,$HGRM_LFPW_GT1S"
 		else
 			# File was not an AWR report
 			echoerr "$1 is not an AWR file"
