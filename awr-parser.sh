@@ -6,7 +6,7 @@
 #
 #  ###########################################################################
 #  #                                                                         #
-#  # Copyright (C) {2014,2015}  Author: flashdba (http://flashdba.com)       #
+#  # Copyright (C) {2014,2015,2016}  Author: flashdba (http://flashdba.com)  #
 #  #                                                                         #
 #  # This program is free software; you can redistribute it and/or modify    #
 #  # it under the terms of the GNU General Public License as published by    #
@@ -25,7 +25,7 @@
 #  ###########################################################################
 #
 AWRSCRIPT_VERSION="1.02"
-AWRSCRIPT_LASTUPDATE="05/01/2015"
+AWRSCRIPT_LASTUPDATE="04/12/2016"
 #
 # Used to parse multiple AWR reports and extract useful information
 # The input is an AWR workload repository report **in TEXT format**
@@ -59,6 +59,7 @@ AWRSCRIPT_LASTUPDATE="05/01/2015"
 #
 # 1.00   01/12/2014	flashdba	Initial release (open sourced from AWR-Analyze.sh)
 # 1.01   05/01/2015	flashdba	Added ability to read Wait Event Histogram sections
+# 1.02   04/12/2016	flashdba	Bugfix: Exadata statistics cause incorrect read of physical read/write throughput
 
 # I have recently learnt that the way I calculate Redo write IOPS/Throughput is incorrect. The Oracle statistic "redo size" does
 # not take into account multiplexing of online redo logs, nor does it include the value of "redo wastage". For this reason the
@@ -1507,7 +1508,7 @@ process_awr_report() {
 					READ_IOPS=$(echo "${AWRLINE[0]}"| cut -c52-66|sed -e 's/^[ \t]*//;s/[ \t]*$//;s/,//g')
 					echodbg "READ_IOPS = ${ENDCHAR}${READ_IOPS}${ENDCHAR}"
 					;;
-				"physical read total bytes"*)
+				"physical read total bytes  "*)
 					# Because this number is often very large Oracle may print it in scientific notation so we have to convert this if neccessary
 					READ_THROUGHPUT=$(echo "${AWRLINE[0]}"| cut -c52-66|sed -e 's/^[ \t]*//;s/[ \t]*$//;s/,//g'| sed -e 's/E+/\*10\^/')
 					# Convert to MB/sec
@@ -1524,7 +1525,7 @@ process_awr_report() {
 					ALL_WRITE_IOPS=$(echo "${AWRLINE[0]}"| cut -c52-66|sed -e 's/^[ \t]*//;s/[ \t]*$//;s/,//g')
 					echodbg "ALL_WRITE_IOPS = ${ENDCHAR}${ALL_WRITE_IOPS}${ENDCHAR}"
 					;;
-				"physical write total bytes"*)
+				"physical write total bytes  "*)
 					# Because this number is often very large Oracle may print it in scientific notation so we have to convert this if neccessary
 					ALL_WRITE_THROUGHPUT=$(echo "${AWRLINE[0]}"| cut -c52-66|sed -e 's/^[ \t]*//;s/[ \t]*$//;s/,//g'| sed -e 's/E+/\*10\^/')
 					# Convert to MB/sec
