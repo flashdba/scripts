@@ -501,7 +501,7 @@ process_awr_report() {
 					let AWRSECTION_SKIP++
 					continue
 					;;
-				"Other Instance Activity Stats  "*)
+				"Other Instance Activity Stats "*)
 					# Start of the Other Instance Activity Stats section in 12c format AWR reports
 					# Use the normal Instance Activity Stats handler
 					echovrb "Start of Other Instance Activity Stats section found at line $ROWCNT"
