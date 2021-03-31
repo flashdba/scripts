@@ -21,6 +21,7 @@ SLOB_INCREMENT=2
 SLOB_SCHEMAS=4
 
 SLOB_RUNLIST=`seq -s " " $SLOB_MINCOUNT $SLOB_INCREMENT $SLOB_MAXCOUNT`
+[ "$1" = "-t" ] && echo "Test Plan: execute with $SLOB_SCHEMAS schemas and thread counts: $SLOB_RUNLIST" && exit 0
 echo "Starting $0 at `date +'%F %T'` with $SLOB_SCHEMAS schemas and thread counts: $SLOB_RUNLIST"
 
 for SLOB_THREADS in $SLOB_RUNLIST
