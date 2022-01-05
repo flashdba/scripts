@@ -34,8 +34,6 @@ set timing off
 define AWR_FORMAT = 'text'
 define DEFAULT_OUTPUT_FILENAME = 'awr-generate.sql'
 define NO_ADDM = 0
--- start and end snap gap. For example to generate report for 1 hour interval with 15 mins snap set it to 4
-define snap_interval = 1
 
 -- Get values for dbid and inst_num before calling awrinput.sql
 
@@ -92,31 +90,30 @@ select 'REM Created by user '||user||' on '||sys_context('userenv', 'host')||' a
 set heading on
   
 -- Begin iterating through snapshots and generating reports
- c_dbid CONSTANT NUMBER := :dbid;
- c_inst_num CONSTANT NUMBER := :inst_num;
- c_start_snap_id CONSTANT NUMBER := :bid;
- c_end_snap_id CONSTANT NUMBER := :eid;
- c_awr_options CONSTANT NUMBER := &&NO_ADDM;
- c_report_type CONSTANT CHAR(4):= '&&AWR_FORMAT';
- v_awr_reportname VARCHAR2(100);
- v_report_suffix CHAR(5);
- c_snap_internaval CONSTANT NUMBER := &&snap_interval;
+DECLARE
 
-CURSOR c_snapshots IS
- select inst_num, start_snap_id, end_snap_id, seqnum
- from (
- select s.instance_number as inst_num,
- s.snap_id as start_snap_id,
- lead(s.snap_id,c_snap_internaval,null) over (partition by s.instance_number order by s.snap_id) as end_snap_id,
- row_number() over (partition by s.instance_number  order by  s.snap_id) as seqnum
- from dba_hist_snapshot s
- where s.dbid = c_dbid
- and s.snap_id >= c_start_snap_id
- and s.snap_id <= c_end_snap_id
- )
- where end_snap_id is not null
- and mod(seqnum, c_snap_internaval) = 0
- order by inst_num, start_snap_id;
+  c_dbid           CONSTANT NUMBER := :dbid;
+  c_inst_num       CONSTANT NUMBER := :inst_num;
+  c_start_snap_id  CONSTANT NUMBER := :bid;
+  c_end_snap_id    CONSTANT NUMBER := :eid;
+  c_awr_options    CONSTANT NUMBER := &&NO_ADDM;
+  c_report_type    CONSTANT CHAR(4):= '&&AWR_FORMAT';
+  v_awr_reportname VARCHAR2(100);
+  v_report_suffix  CHAR(5);
+
+  CURSOR c_snapshots IS
+  select inst_num, start_snap_id, end_snap_id
+  from (
+    select s.instance_number as inst_num,
+           s.snap_id as start_snap_id,
+           lead(s.snap_id,1,null) over (partition by s.instance_number order by s.snap_id) as end_snap_id
+      from dba_hist_snapshot s
+     where s.dbid            = c_dbid
+       and s.snap_id        >= c_start_snap_id
+       and s.snap_id        <= c_end_snap_id
+  )
+  where end_snap_id is not null
+  order by inst_num, start_snap_id;
 
 BEGIN
 
