@@ -90,6 +90,8 @@ prompt REM Used to create multiple AWR reports between two snapshots
 select 'REM Created by user '||user||' on '||sys_context('userenv', 'host')||' at '||to_char(sysdate, 'DD-MON-YYYY HH24:MI') from dual;
 
 set heading on
+
+DECLARE
   
 -- Begin iterating through snapshots and generating reports
  c_dbid CONSTANT NUMBER := :dbid;
