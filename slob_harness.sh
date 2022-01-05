@@ -31,9 +31,9 @@ do
       echo "Executing: sh ./runit.sh -s $SLOB_SCHEMAS -t $SLOB_THREADS" > $SLOB_LOGDIR/runit.$SLOB_SESSIONS.log
       sh ./runit.sh -s $SLOB_SCHEMAS -t $SLOB_THREADS >> $SLOB_LOGDIR/runit.$SLOB_SESSIONS.log 2>&1
 
-      if [ $SLOB_SESSIONS -lt 100 ]; then
+      if [ $SLOB_SESSIONS -lt 10 ]; then
             [ -f awr.txt ] && mv awr.txt $SLOB_OUTDIR/awr.00$SLOB_SESSIONS.txt
-      elif [ $SLOB_SESSIONS -lt 10 ]; then
+      elif [ $SLOB_SESSIONS -lt 100 ]; then
             [ -f awr.txt ] && mv awr.txt $SLOB_OUTDIR/awr.0$SLOB_SESSIONS.txt
       else
             [ -f awr.txt ] && mv awr.txt $SLOB_OUTDIR/awr.$SLOB_SESSIONS.txt
